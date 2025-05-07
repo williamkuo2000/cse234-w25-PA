@@ -12,6 +12,7 @@ def check_evaluator_output(
     expected_outputs: List[torch.Tensor],
 ) -> None:
     output_values = evaluator.run(input_values)
+    print("output_values", output_values)
     assert len(output_values) == len(expected_outputs)
     for output_val, expected_val in zip(output_values, expected_outputs):
         print(repr(output_val))
@@ -46,6 +47,7 @@ def test_div():
     y = ad.div(x1, x2)
     y_grad = ad.Variable("y_grad")
     x1_grad, x2_grad = y.op.gradient(y, y_grad)
+    print("y.op.gradient return:", x1_grad, x2_grad)
     evaluator = ad.Evaluator(eval_nodes=[x1_grad, x2_grad])
 
     check_evaluator_output(

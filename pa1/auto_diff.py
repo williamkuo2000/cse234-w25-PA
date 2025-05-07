@@ -454,11 +454,24 @@ class DivOp(Op):
         """Return the element-wise division of input values."""
         assert len(input_values) == 2
         """TODO: your code here"""
+        return input_values[0] / input_values[1]
     
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """Given gradient of division node, return partial adjoint to each input."""
         """TODO: your code here"""
+        A, B = node.inputs
+        print("A, B", A, B)
+
+        grad_A = DivOp()(node_A=output_grad, node_B=B)
+        grad_B = MulOp()(node_A=MulByConstOp()(node_A=output_grad, const_val=-1), node_B=DivOp()(node_A=A, node_B=MulOp()(node_A=B, node_B=B)))
+        print("grad_A, grad_B", grad_A, grad_B)
+
+        grad_A = output_grad / B
+        grad_B = -1 * output_grad * A / (B * B)
+        print("grad_A, grad_B", grad_A, grad_B)
+        
+        return [grad_A, grad_B]
 
 class DivByConstOp(Op):
     """Op to element-wise divide a nodes by a constant."""
@@ -475,10 +488,12 @@ class DivByConstOp(Op):
         """Return the element-wise division of the input value and the constant."""
         assert len(input_values) == 1
         """TODO: your code here"""
+        return input_values[0] / node.constant
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """Given gradient of division node, return partial adjoint to the input."""
         """TODO: your code here"""
+        return [output_grad / node.constant]
 
 class TransposeOp(Op):
     """Op to transpose a matrix."""
@@ -499,10 +514,14 @@ class TransposeOp(Op):
         """
         assert len(input_values) == 1
         """TODO: your code here"""
+        dim0, dim1 = node.attrs["dim0"], node.attrs["dim1"]
+        return input_values[0].transpose(dim0, dim1)
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """Given gradient of transpose node, return partial adjoint to input."""
         """TODO: your code here"""
+        dim0, dim1 = node.attrs["dim0"], node.attrs["dim1"]
+        return [transpose(output_grad, dim0, dim1)]
 
 class MatMulOp(Op):
     """Matrix multiplication op of two nodes."""
@@ -534,14 +553,29 @@ class MatMulOp(Op):
         """Return the matrix multiplication result of input values."""
         assert len(input_values) == 2
         """TODO: your code here"""
+        return torch.matmul(input_values[0], input_values[1])
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """Given gradient of matmul node, return partial adjoint to each input."""
         """TODO: your code here"""
+        A, B = node.inputs
+
+        # Use TransposeOp to properly transpose B and A
+        transposed_B = TransposeOp()(B, dim0=0, dim1=1)
+        transposed_A = TransposeOp()(A, dim0=0, dim1=1)
+        print("transposed_A, transposed_B", transposed_A, transposed_B)
+
+        # Use MatMulOp explicitly to handle matrix multiplications
+        grad_A = MatMulOp()(output_grad, transposed_B)
+        grad_B = MatMulOp()(transposed_A, output_grad)
+        print("grad_A, grad_B", grad_A, grad_B)
+
+        return [grad_A, grad_B]
 
 
 class SoftmaxOp(Op):
     """Softmax operation on input node."""
+    """https://mmuratarat.github.io/2019-01-27/derivation-of-softmax-function"""
 
     def __call__(self, node_A: Node, dim: int = -1) -> Node:
         return Node(
@@ -555,10 +589,23 @@ class SoftmaxOp(Op):
         """Return softmax of input along specified dimension."""
         assert len(input_values) == 1
         """TODO: your code here"""
+        dim = node.attrs["dim"]
+        return torch.softmax(input_values[0], dim=dim)
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """Given gradient of softmax node, return partial adjoint to input."""
         """TODO: your code here"""
+        x = node.inputs[0].
+        print(type(x))
+        d = node.attrs["dim"]
+
+        ex = torch.exp(x)
+        sig_ex = sum_op(ex, dim=d, keepdim=True)
+
+        smx = softmax(node, node)
+
+        return smx * output_grad - sum(output_grad * smx, dim=d, keepdim=True)
+
 
 
 class LayerNormOp(Op):
@@ -576,6 +623,17 @@ class LayerNormOp(Op):
         """Return layer normalized input."""
         assert len(input_values) == 1
         """TODO: your code here"""
+        x = input_values[0]
+        normalized_shape = node.attrs["normalized_shape"]
+        eps = node.attrs["eps"]
+
+        # Normalize over the last len(normalized_shape) axes
+        reduction_axes = tuple(range(-len(normalized_shape), 0))
+
+        mean = x.mean(dim=reduction_axes, keepdim=True)
+        var = x.var(dim=reduction_axes, unbiased=False, keepdim=True)
+
+        return (x - mean) / torch.sqrt(var + eps)
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """
@@ -583,6 +641,21 @@ class LayerNormOp(Op):
         adjoint (gradient) wrt the input x.
         """
         """TODO: your code here"""
+        x = node.inputs[0]
+        normalized_shape = node.attrs["normalized_shape"]
+        eps = node.attrs["eps"]
+
+        mean = x.mean(dim=normalized_shape, keepdim=True)
+        var = x.var(dim=normalized_shape, unbiased=False, keepdim=True)
+        std_inv = 1.0 / torch.sqrt(var + eps)
+
+        N = torch.prod(torch.tensor(x.shape[normalized_shape]))  # Normalized dimension size
+        dxhat = output_grad * std_inv
+        dvar = (-0.5 * (output_grad * (x - mean) * std_inv**3)).sum(dim=normalized_shape, keepdim=True)
+        dmean = (-dxhat).sum(dim=normalized_shape, keepdim=True) - 2.0 * dvar * (x - mean).sum(dim=normalized_shape, keepdim=True) / N
+
+        dx = dxhat + (dvar * 2.0 * (x - mean) / N) + (dmean / N)
+        return [dx]
 
 class ReLUOp(Op):
     """ReLU activation function."""
@@ -598,10 +671,13 @@ class ReLUOp(Op):
         """Return ReLU of input."""
         assert len(input_values) == 1
         """TODO: your code here"""
+        return torch.relu(input_values[0])
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """Given gradient of ReLU node, return partial adjoint to input."""
         """TODO: your code here"""
+        relu_grad = (node.inputs[0] > 0).float()
+        return [output_grad * relu_grad]
 
 class SqrtOp(Op):
     """Op to compute element-wise square root."""
@@ -616,9 +692,13 @@ class SqrtOp(Op):
     def compute(self, node: Node, input_values: List[torch.Tensor]) -> torch.Tensor:
         assert len(input_values) == 1
         """TODO: your code here"""
+        return torch.sqrt(input_values[0])
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """TODO: your code here"""
+        sqrt_A = Node(inputs=[node.inputs[0]], op=self, name=f"Sqrt({node.inputs[0].name})")
+        grad_A = output_grad / (2 * sqrt_A)
+        return [grad_A]
 
 class PowerOp(Op):
     """Op to compute element-wise power."""
@@ -634,9 +714,14 @@ class PowerOp(Op):
     def compute(self, node: Node, input_values: List[torch.Tensor]) -> torch.Tensor:
         assert len(input_values) == 1
         """TODO: your code here"""
+        exponent = node.attrs["exponent"]
+        return torch.pow(input_values[0], exponent)
 
     def gradient(self, node: Node, output_grad: Node) -> List[Node]:
         """TODO: your code here"""
+        exponent = node.attrs["exponent"]
+        grad_A = exponent * power(node.inputs[0], (exponent - 1)) * output_grad
+        return [grad_A]
 
 class MeanOp(Op):
     """Op to compute mean along specified dimensions.
@@ -714,6 +799,14 @@ class Evaluator:
         """
         self.eval_nodes = eval_nodes
 
+    def subrun(self, input_unknown, input_values: Dict[Node, torch.Tensor], ret):
+        if type(input_unknown) == Node:
+            inputs = [input_values[val] for val in eval_node.inputs]
+            return 
+
+        elif type(input_unknown) == tuple:
+            return subrun()
+
     def run(self, input_values: Dict[Node, torch.Tensor]) -> List[torch.Tensor]:
         """Computes values of nodes in `eval_nodes` field with
         the computational graph input values given by the `input_values` dict.
@@ -733,6 +826,88 @@ class Evaluator:
         """
         """TODO: your code here"""
 
+        node_values: Dict[Node, torch.Tensor] = {}
+
+        def compute(node: Node) -> torch.Tensor:
+            if node in node_values:
+                return node_values[node]
+
+            if node in input_values:
+                node_values[node] = input_values[node]
+                return node_values[node]
+
+            values = []
+            for node_input in node.inputs:
+                if node_input not in node_values:
+                    raise ValueError(
+                        f"Input node {node_input} not found in input values."
+                    )
+                values.append(node_values[node_input])
+
+            node_values[node] = node.op.compute(node, values)
+            return node_values[node]
+
+        graph_nodes = explore_graph(self.eval_nodes)
+        for node in reverse_topological_sort(graph_nodes):
+            compute(node)
+
+        return [node_values[node] for node in self.eval_nodes]
+
+
+def explore_graph(out_nodes: List[Node]) -> List[Node]:
+    visited: Set[Node] = set()
+    nodes: List[Node] = []
+
+    def dfs(node: Node):
+        if node in visited:
+            return
+
+        visited.add(node)
+
+        if not isinstance(node.op, PlaceholderOp):
+            for node_input in node.inputs:
+                dfs(node_input)
+
+        nodes.append(node)
+
+    for node in out_nodes:
+        dfs(node)
+
+    return nodes
+
+
+def reverse_topological_sort(nodes: List[Node]) -> List[Node]:
+    """Helper function to perform topological sort on nodes.
+
+    Parameters
+    ----------
+    nodes : List[Node] or Node
+        Node(s) to sort
+
+    Returns
+    -------
+    List[Node]
+        Nodes in topological order
+    """
+    sorted_nodes = []
+    visited = set()
+
+    def visit(node: Node):
+        if node in visited:
+            return
+
+        visited.add(node)
+
+        if not isinstance(node.op, PlaceholderOp):
+            for input_node in node.inputs:
+                visit(input_node)
+
+        sorted_nodes.append(node)
+
+    for node in nodes:
+        visit(node)
+
+    return sorted_nodes
 
 def gradients(output_node: Node, nodes: List[Node]) -> List[Node]:
     """Construct the backward computational graph, which takes gradient
